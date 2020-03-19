@@ -802,25 +802,43 @@ func (s *StateDB) clearJournalAndRefund() {
 	s.validRevisions = s.validRevisions[:0] // Snapshots can be created without journal entires
 }
 
+type ModifiedAccount struct {
+	Account
+	Storage
+}
+type StateChanges map[common.Address]ModifiedAccount
+
 // Commit writes the state to the underlying in-memory trie database.
-func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
+func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, StateChanges, error) {
 	// Finalize any pending changes and merge everything into the tries
 	s.IntermediateRoot(deleteEmptyObjects)
 
+	stateChanges := make(StateChanges)
+
 	// Commit objects to the trie, measuring the elapsed time
 	for addr := range s.stateObjectsDirty {
+		dirtyStateObject := s.stateObjects[addr]
+		modifiedAccount := ModifiedAccount{Account: dirtyStateObject.data} //state_object.data is the account
+
 		if obj := s.stateObjects[addr]; !obj.deleted {
 			// Write any contract code associated with the state object
 			if obj.code != nil && obj.dirtyCode {
 				s.db.TrieDB().InsertBlob(common.BytesToHash(obj.CodeHash()), obj.code)
 				obj.dirtyCode = false
 			}
+
+			// Add the origin storage to the modifiedAccounts map before it's committed (and flushed from in-memory)
+			modifiedAccount.Storage = dirtyStateObject.originStorage
+
 			// Write any storage changes in the state object to its storage trie
 			if err := obj.CommitTrie(s.db); err != nil {
-				return common.Hash{}, err
+				return common.Hash{}, StateChanges{}, err
 			}
 		}
+
+		stateChanges[addr] = modifiedAccount
 	}
+
 	if len(s.stateObjectsDirty) > 0 {
 		s.stateObjectsDirty = make(map[common.Address]struct{})
 	}
@@ -864,5 +882,6 @@ func (s *StateDB) Commit(deleteEmptyObjects bool) (common.Hash, error) {
 		}
 		s.snap, s.snapDestructs, s.snapAccounts, s.snapStorage = nil, nil, nil, nil
 	}
-	return root, err
+
+	return root, stateChanges, err
 }
