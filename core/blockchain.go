@@ -148,15 +148,16 @@ type BlockChain struct {
 	triegc *prque.Prque   // Priority queue mapping block numbers to tries to gc
 	gcproc time.Duration  // Accumulates canonical block processing for trie dumping
 
-	hc            *HeaderChain
-	rmLogsFeed    event.Feed
-	chainFeed     event.Feed
-	chainSideFeed event.Feed
-	chainHeadFeed event.Feed
-	logsFeed      event.Feed
-	blockProcFeed event.Feed
-	scope         event.SubscriptionScope
-	genesisBlock  *types.Block
+	hc                   *HeaderChain
+	rmLogsFeed           event.Feed
+	chainFeed            event.Feed
+	chainSideFeed        event.Feed
+	chainHeadFeed        event.Feed
+	stateChangeEventFeed event.Feed
+	logsFeed             event.Feed
+	blockProcFeed        event.Feed
+	scope                event.SubscriptionScope
+	genesisBlock         *types.Block
 
 	chainmu sync.RWMutex // blockchain insertion lock
 
@@ -1370,7 +1371,8 @@ func (bc *BlockChain) writeBlockWithState(block *types.Block, receipts []*types.
 	}
 	// Commit all cached state changes into underlying memory database.
 	root, stateChanges, commitErr := state.Commit(bc.chainConfig.IsEIP158(block.Number()))
-	log.Debug("StateChanges", "count", len(stateChanges))
+	log.Debug("Sending StateChangeEvent to the feed", "block number", block.Number(), "count", len(stateChanges))
+	bc.stateChangeEventFeed.Send(StateChangeEvent{block, stateChanges})
 
 	if commitErr != nil {
 		return NonStatTy, commitErr
@@ -2300,4 +2302,8 @@ func (bc *BlockChain) SubscribeLogsEvent(ch chan<- []*types.Log) event.Subscript
 // block processing has started while false means it has stopped.
 func (bc *BlockChain) SubscribeBlockProcessingEvent(ch chan<- bool) event.Subscription {
 	return bc.scope.Track(bc.blockProcFeed.Subscribe(ch))
+}
+
+func (bc *BlockChain) SubscribeStateChangeEvents(ch chan<- StateChangeEvent) event.Subscription {
+	return bc.scope.Track(bc.stateChangeEventFeed.Subscribe(ch))
 }
